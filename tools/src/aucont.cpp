@@ -54,7 +54,7 @@ void run_in_container(int pid, char** cmd) {
     }
 
     close(pipefd[1]);
-    for (string ns : {"pid", "ipc", "uts", "net", "mnt"}) {
+    for (string ns : {"user", "pid", "ipc", "uts", "net", "mnt"}) {
         int fd = open(("/proc/" + to_string(pid) + "/ns/" + ns).c_str(), O_RDONLY);
         if (setns(fd, 0))
             fatal_error("setns " + ns + ":");
