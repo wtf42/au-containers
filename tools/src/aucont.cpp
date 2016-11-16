@@ -13,9 +13,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
-//#include <sys/sysmacros.h>  // makedev
-//#include <sys/mount.h>  // mount
-//#include <sys/syscall.h>
 #include <iostream>
 #include <fstream>
 #include <string>
@@ -41,38 +38,37 @@ void run_in_container(int pid, char** cmd) {
     if (kill(pid, 0))
         fatal_error("process " + to_string(pid) + " not found");
 
-    int pipefd[2];
-    if (pipe2(pipefd, O_CLOEXEC))
-        error("pipe2");
+    //int pipefd[2];
+    //pipe2(pipefd, O_CLOEXEC);
 
-    if (fork()) {
+    /*if (fork()) {
         close(pipefd[0]);
         // TODO: setup cpu cgroup
         close(pipefd[1]);
         wait(NULL);
-        return;
-    }
+        exit(0);
+    }*/
 
-    close(pipefd[1]);
     for (string ns : {"user", "pid", "ipc", "uts", "net", "mnt"}) {
         int fd = open(("/proc/" + to_string(pid) + "/ns/" + ns).c_str(), O_RDONLY);
         if (setns(fd, 0))
-            fatal_error("setns " + ns + ":");
+            fatal_error("setns " + ns);
         close(fd);
     }
-    close(pipefd[0]);
+
+    if (fork()) {
+        wait(NULL);
+        exit(0);
+    }
+
+    //close(pipefd[1]);
+    //close(pipefd[0]);
 
     execv(cmd[0], cmd);
 }
 
 
-
-constexpr int magic_value = 42;
-
 int read_int(int fd) {
-    int magic;
-    if (read(fd, &magic, sizeof(magic)) != sizeof(magic) || magic != magic_value)
-        error("read magic");
     int ret;
     if (read(fd, &ret, sizeof(ret)) != sizeof(ret))
         error("read int");
@@ -80,8 +76,6 @@ int read_int(int fd) {
 }
 
 void write_int(int fd, int value) {
-    if (write(fd, &magic_value, sizeof(magic_value)) != sizeof(magic_value))
-        error("write magic");
     if (write(fd, &value, sizeof(value)) != sizeof(value))
         error("write int");
 }
@@ -139,82 +133,92 @@ void daemonize() {
 constexpr int STACK_SIZE = 4 * 1024 * 1024;
 char stack[STACK_SIZE];
 
-int in_pipe_fds[2];
-int out_pipe_fds[2];
+int pipe_fd1[2];
+int pipe_fd2[2];
 
 constexpr int USERNS_WAIT = 100;
 constexpr int SETUP_WAIT = 101;
 constexpr int SYNC_WAIT = 102;
 
 int setup_inside_container(void*) {
-    close(in_pipe_fds[0]);
-    close(out_pipe_fds[1]);
+    close(pipe_fd1[0]);
+    close(pipe_fd2[1]);
+    int in_fd = pipe_fd2[0];
+    int out_fd = pipe_fd1[1];
 
     if (options.daemonize) {
         daemonize();
     }
 
-    //if (unshare(CLONE_NEWPID))
-    //    fatal_error("unshare");
+    if (unshare(CLONE_NEWPID))
+        fatal_error("unshare");
 
-    if (read_int(out_pipe_fds[0]) != USERNS_WAIT)
+    if (int pid = fork()) {
+        write_int(out_fd, pid);
+        close(in_fd);
+        close(out_fd);
+
+        wait(NULL);
+        exit(0);
+    }
+
+    if (read_int(in_fd) != USERNS_WAIT)
         fatal_error("USERNS_WAIT");
 
     setup_filesystem();
     setup_hostname();
     //TODO: setup_network();
 
-    write_int(in_pipe_fds[1], SETUP_WAIT);
+    write_int(out_fd, SETUP_WAIT);
 
-    if (read_int(out_pipe_fds[0]) != SYNC_WAIT)
+    if (read_int(in_fd) != SYNC_WAIT)
         fatal_error("SYNC_WAIT");
 
-    close(in_pipe_fds[1]);
-    close(out_pipe_fds[0]);
+    close(in_fd);
+    close(out_fd);
 
     return execv(options.cmd[0], options.cmd);
 }
 
 void start_container() {
-    if (pipe2(in_pipe_fds, O_CLOEXEC) || pipe2(out_pipe_fds, O_CLOEXEC))
-        fatal_error("pipe2: ");
+    if (pipe2(pipe_fd1, O_CLOEXEC) || pipe2(pipe_fd2, O_CLOEXEC))
+        fatal_error("pipe2");
 
     int clone_flags = SIGCHLD
         | CLONE_NEWIPC
         | CLONE_NEWNS
-        | CLONE_NEWPID  //
+        //| CLONE_NEWPID  //
         | CLONE_NEWUTS
         | CLONE_NEWUSER
         | CLONE_NEWNET;
     int cont_pid = clone(setup_inside_container, stack + STACK_SIZE, clone_flags, NULL);
 
-    close(in_pipe_fds[1]);
-    close(out_pipe_fds[0]);
+    close(pipe_fd1[1]);
+    close(pipe_fd2[0]);
     //0 - read, 1 - write
+    int in_fd = pipe_fd1[0];
+    int out_fd = pipe_fd2[1];
 
-    //if (options.daemonize)
-    //    cont_pid = read_int(in_pipe_fds[0]);
+    cont_pid = read_int(in_fd);
 
     setup_userns(cont_pid);
-    write_int(out_pipe_fds[1], USERNS_WAIT);
+    write_int(out_fd, USERNS_WAIT);
 
-    if (read_int(in_pipe_fds[0]) != SETUP_WAIT)
+    if (read_int(in_fd) != SETUP_WAIT)
         fatal_error("SETUP_WAIT");
     setup_devices();
     //TODO: setup cgroup
     //TODO: setup networking
 
-    write_int(out_pipe_fds[1], SYNC_WAIT);
+    write_int(out_fd, SYNC_WAIT);
 
-    close(in_pipe_fds[0]);
-    close(out_pipe_fds[1]);
+    close(in_fd);
+    close(out_fd);
 
-    init_containers();
     add_container(cont_pid);
     std::cout << cont_pid << std::endl;
 
     if (!options.daemonize) {
-        //if (waitpid(cont_pid, NULL, __WCLONE)) fatal_error("waitpid");
         wait(NULL);
         delete_container(cont_pid);
     }
