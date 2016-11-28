@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <arpa/inet.h>
 
 #include <iostream>
 #include <fstream>
@@ -19,6 +20,9 @@
 
 using std::string;
 using std::to_string;
+
+int read_int(int fd);
+void write_int(int fd, int value);
 
 start_options options;
 void start_container();
@@ -34,20 +38,34 @@ void kill_container(int pid, int sig) {
         error("failed to kill " + to_string(pid));
 }
 
+constexpr int CPUCG_WAIT = 100;
 void run_in_container(int pid, char** cmd) {
     if (kill(pid, 0))
         fatal_error("process " + to_string(pid) + " not found");
 
-    //int pipefd[2];
-    //pipe2(pipefd, O_CLOEXEC);
+    int pipefd[2];
+    if (pipe2(pipefd, O_CLOEXEC))
+        fatal_error("pipe2");
 
-    /*if (fork()) {
+    if (int exec_pid = fork()) {
         close(pipefd[0]);
-        // TODO: setup cpu cgroup
+
+        if (system((AUCONT_PREFIX"bin/scripts/cpu_cg_cont_setup.sh " +
+                    to_string(pid) + " " +
+                    to_string(exec_pid) + " " +
+                    AUCONT_PREFIX).c_str()))
+            fatal_error("cpu_setup: ");
+
+        write_int(pipefd[1], CPUCG_WAIT);
+
         close(pipefd[1]);
         wait(NULL);
         exit(0);
-    }*/
+    }
+    close(pipefd[1]);
+
+    if (read_int(pipefd[0]) != CPUCG_WAIT)
+        fatal_error("CPUCG_WAIT");
 
     for (string ns : {"user", "pid", "ipc", "uts", "net", "mnt"}) {
         int fd = open(("/proc/" + to_string(pid) + "/ns/" + ns).c_str(), O_RDONLY);
@@ -56,13 +74,12 @@ void run_in_container(int pid, char** cmd) {
         close(fd);
     }
 
+    close(pipefd[0]);
+
     if (fork()) {
         wait(NULL);
         exit(0);
     }
-
-    //close(pipefd[1]);
-    //close(pipefd[0]);
 
     execv(cmd[0], cmd);
 }
@@ -78,6 +95,40 @@ int read_int(int fd) {
 void write_int(int fd, int value) {
     if (write(fd, &value, sizeof(value)) != sizeof(value))
         error("write int");
+}
+
+string net2string(unsigned net) {
+    char buf[sizeof("000.000.000.000")];
+    inet_ntop(AF_INET, &net, buf, sizeof(buf));
+    return string(buf);
+}
+
+void setup_host_network(int pid) {
+    string net_cont = net2string(options.net);
+    string net_host = net2string(options.net + (1 << 24));
+    if (system((AUCONT_PREFIX"bin/scripts/net_host_setup.sh " +
+                to_string(pid) + " " +
+                net_cont + " " +
+                net_host).c_str()))
+        fatal_error("net_host_setup: ");
+}
+
+void setup_container_network(int pid) {
+    string net_cont = net2string(options.net);
+    string net_host = net2string(options.net + (1 << 24));
+    if (system((AUCONT_PREFIX"bin/scripts/net_cont_setup.sh " +
+                to_string(pid) + " " +
+                net_cont + " " +
+                net_host).c_str()))
+        fatal_error("net_cont_setup: ");
+}
+
+void setup_cpu_cg(int pid) {
+    if (system((AUCONT_PREFIX"bin/scripts/cpu_cg_setup.sh " +
+                to_string(pid) + " " +
+                to_string(options.cpu) + " " +
+                AUCONT_PREFIX).c_str()))
+        fatal_error("cpu_setup: ");
 }
 
 void setup_devices() {
@@ -136,7 +187,6 @@ char stack[STACK_SIZE];
 int pipe_fd1[2];
 int pipe_fd2[2];
 
-constexpr int USERNS_WAIT = 100;
 constexpr int SETUP_WAIT = 101;
 constexpr int SYNC_WAIT = 102;
 
@@ -162,12 +212,12 @@ int setup_inside_container(void*) {
         exit(0);
     }
 
-    if (read_int(in_fd) != USERNS_WAIT)
-        fatal_error("USERNS_WAIT");
+    int cont_pid = read_int(in_fd);
 
+    if (options.net)
+        setup_container_network(cont_pid);
     setup_filesystem();
     setup_hostname();
-    //TODO: setup_network();
 
     write_int(out_fd, SETUP_WAIT);
 
@@ -181,6 +231,8 @@ int setup_inside_container(void*) {
 }
 
 void start_container() {
+    if (system("sudo echo > /dev/null"))
+        fatal_error("sudo");
     if (pipe2(pipe_fd1, O_CLOEXEC) || pipe2(pipe_fd2, O_CLOEXEC))
         fatal_error("pipe2");
 
@@ -202,13 +254,17 @@ void start_container() {
     cont_pid = read_int(in_fd);
 
     setup_userns(cont_pid);
-    write_int(out_fd, USERNS_WAIT);
+    if (options.cpu != 100)
+        setup_cpu_cg(cont_pid);
+    if (options.net)
+        setup_host_network(cont_pid);
+
+    write_int(out_fd, cont_pid);
 
     if (read_int(in_fd) != SETUP_WAIT)
         fatal_error("SETUP_WAIT");
+
     setup_devices();
-    //TODO: setup cgroup
-    //TODO: setup networking
 
     write_int(out_fd, SYNC_WAIT);
 
