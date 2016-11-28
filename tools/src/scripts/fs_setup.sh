@@ -1,25 +1,25 @@
 #!/bin/bash
 
-root=$1
+ROOT=$1
 
-mount -t proc proc $root/proc
-mount -t sysfs sys $root/sys
-mount -t tmpfs none $root/dev
+mount -t proc proc $ROOT/proc
+mount -t sysfs sys $ROOT/sys
+mount -t tmpfs none $ROOT/dev
 
-mkdir -p $root/dev/shm
-mkdir -p $root/dev/mqueue
-mount -t tmpfs none $root/dev/shm
-mount -t mqueue none $root/dev/mqueue
+mkdir -p $ROOT/dev/shm
+mkdir -p $ROOT/dev/mqueue
+mount -t tmpfs none $ROOT/dev/shm
+mount -t mqueue none $ROOT/dev/mqueue
 
-[ -e $root/dev/null ] || touch $root/dev/null
-mount --bind /dev/null $root/dev/null
-[ -e $root/dev/zero ] || touch $root/dev/zero
-mount --bind /dev/zero $root/dev/zero
-[ -e $root/dev/urandom ] || touch $root/dev/urandom
-mount --bind /dev/urandom $root/dev/urandom
+[ -e $ROOT/dev/null ] || touch $ROOT/dev/null
+mount --bind /dev/null $ROOT/dev/null
+[ -e $ROOT/dev/zero ] || touch $ROOT/dev/zero
+mount --bind /dev/zero $ROOT/dev/zero
+[ -e $ROOT/dev/urandom ] || touch $ROOT/dev/urandom
+mount --bind /dev/urandom $ROOT/dev/urandom
 
 mount --make-rprivate /
-mkdir -m 0777 -p $root/old_root
-mount --rbind $root/ $root/
-pivot_root $root/ $root/old_root
+mkdir -m 0777 -p $ROOT/old_root
+mount --rbind $ROOT/ $ROOT/
+pivot_root $ROOT/ $ROOT/old_root
 umount -l /old_root

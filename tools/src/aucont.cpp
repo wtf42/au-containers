@@ -131,11 +131,6 @@ void setup_cpu_cg(int pid) {
         fatal_error("cpu_setup: ");
 }
 
-void setup_devices() {
-    if (system((AUCONT_PREFIX"bin/scripts/dev_setup.sh " + string(options.image)).c_str()))
-        fatal_error("dev_setup: ");
-}
-
 void setup_filesystem() {
     if (system((AUCONT_PREFIX"bin/scripts/fs_setup.sh " + string(options.image)).c_str()))
         fatal_error("fs_setup: ");
@@ -239,7 +234,6 @@ void start_container() {
     int clone_flags = SIGCHLD
         | CLONE_NEWIPC
         | CLONE_NEWNS
-        //| CLONE_NEWPID  //
         | CLONE_NEWUTS
         | CLONE_NEWUSER
         | CLONE_NEWNET;
@@ -247,7 +241,6 @@ void start_container() {
 
     close(pipe_fd1[1]);
     close(pipe_fd2[0]);
-    //0 - read, 1 - write
     int in_fd = pipe_fd1[0];
     int out_fd = pipe_fd2[1];
 
@@ -263,8 +256,6 @@ void start_container() {
 
     if (read_int(in_fd) != SETUP_WAIT)
         fatal_error("SETUP_WAIT");
-
-    setup_devices();
 
     write_int(out_fd, SYNC_WAIT);
 

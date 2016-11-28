@@ -24,6 +24,3 @@ CG_QUOTA=$((CG_PERIOD * NPROC * QUOTA / 100))
 
 echo $CG_PERIOD > $CONT_CGDIR/cpu.cfs_period_us
 echo $CG_QUOTA > $CONT_CGDIR/cpu.cfs_quota_us
-
-#sudo umount $CGMOUNT
-#rmdir $CGMOUNT

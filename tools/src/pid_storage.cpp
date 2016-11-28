@@ -52,10 +52,6 @@ bool add_container(int pid) {
     return true;
 }
 
-bool init_containers() {
-    return true;
-}
-
 bool cleanup_containers() {
     std::set<int> pids;
     bool ok = true;

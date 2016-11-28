@@ -8,7 +8,7 @@ int main(int argc, char** argv) {
     char** cmd;
 
     if (argc < 3)
-    	invalid_arg(2);
+        invalid_arg(2);
     pid = atoi(argv[1]);
     cmd = argv + 2;
 
